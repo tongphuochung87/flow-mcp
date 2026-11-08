@@ -77,8 +77,18 @@ The preview tool could not read the project while it lived in ~/Desktop; check t
 - Edit run (paid, 2026-09-19): in `/edit/<uuid>` type into the last `.ProseMirror`, `Start generation`; progress shows as
   "NN% <prompt>" text in the view and vanishes when done (~80 s for 4 s); URL does not change; the result is a NEW video
   tile at the top of the grid with the same title as the source. No credit quote is shown anywhere beforehand.
-- Voice picker: `Select a voice` → dialog with listbox options "<Name> <description>" → `Add to character`. Filling
-  "Customize performance" switches the dialog to generating/saving a new voice (`Preview`, `Save new voice`), so the tool uses stock voices only.
+- Voice picker: `Select a voice` → dialog with listbox options "<Name> <description>" (15 stock voices), a Sample
+  dialogue textarea (placeholder "Hi there!…", 120 chars), a `Preview` button, the "Customize performance" textarea
+  (placeholder "Describe the voice performance style…") and `Add to character`. Filling Customize performance
+  switches the dialog to saving a NEW custom voice built from the picked preset: `Add to character` is replaced by
+  a Voice name field (default "<voice> custom"), `Reset` and `Save new voice`. Preview generates the custom voice
+  (buttons disable with an hourglass); the Voice name input ignores programmatic fill() - its DOM value changes
+  but Flow's state keeps the default, so the name must be typed key by key - and Save then returns the dialog to
+  the stock layout with the new voice selected, and
+  `Add to character` attaches it. The saved voice stays in the project's voice list and can be picked later by name
+  like a stock voice. The performance field exists only in the wide layout; a narrow window has no such field
+  (all re-verified live 2026-11-08). `flow_character` drives this via `voice_performance` / `voice_name` /
+  `voice_sample`.
 - Characters view lists `New character`, the user's own "Me" avatar and characters. Characters are PER PROJECT, not
   account-wide (checked 2026-09-20 across all three projects). The account holds exactly two, both real: "Pip" and
   "Sticky". The old "zz-test-*" and "Mina the barista" test characters are gone.

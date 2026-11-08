@@ -1158,6 +1158,9 @@ export interface CharacterParams {
   aspect_ratio?: string;
   personality?: string;
   voice?: string;
+  voice_performance?: string;
+  voice_name?: string;
+  voice_sample?: string;
 }
 
 // Creates a reusable Flow character from an image (local file, or "asset:<title>" already in the project).
@@ -1185,7 +1188,84 @@ export function rememberCharacter(name: string, look: string): void {
   writeFileSync(LOOKS_FILE, JSON.stringify(all, null, 2));
 }
 
-export async function createCharacter(c: CharacterParams, job?: Job): Promise<{ name: string; url: string; portrait?: string }> {
+// Drives the voice dialog's "Customize performance" field after a stock voice has been picked, and returns the
+// name the new custom voice was saved under. Verified against the live UI on 2026-11-08: typing a performance
+// switches the dialog from attaching the stock voice to saving a new one - "Add to character" is replaced by a
+// Voice name field (default "<voice> custom"), Reset and Save new voice. Preview generates the custom voice on
+// Flow's side (the dialog's buttons disable with an hourglass while it works), and only then does Save new voice
+// take effect; saving returns the dialog to the stock layout with the new voice selected, ready for
+// "Add to character". The saved voice also stays in the project's voice list, so a later character can reuse it
+// by passing its name as `voice` with no performance text. Two traps, both measured: the Voice name input ignores
+// a programmatic fill() - the DOM value changes but Flow's own state keeps the default name, and the voice is
+// saved as "<voice> custom" - so the name has to be typed key by key like a person would; and the performance
+// field only exists in Flow's wide layout - a narrow window renders a layout without it at all.
+async function customizeVoicePerformance(page: Page, c: CharacterParams): Promise<string> {
+  const perf = page.locator('textarea[placeholder="Describe the voice performance style..."]');
+  if (!(await perf.isVisible().catch(() => false))) {
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Close" })
+      .click()
+      .catch(() => {});
+    throw new Error(
+      `"Customize performance" is not on screen, so the custom voice could not be made. Character was created without a voice. ` +
+        `Flow only shows that field in its wide layout: make the Flow window wider (maximise it) and create the character again, ` +
+        `or leave voice_performance out to attach the stock voice "${c.voice}" unchanged.`,
+    );
+  }
+  await perf.fill(c.voice_performance!);
+  const nameInput = page.locator('input[placeholder="Enter voice name"]');
+  await nameInput.waitFor({ state: "visible", timeout: 10_000 });
+  if (c.voice_name) {
+    // Typed, not fill()ed: see the note above - fill() leaves Flow's state holding the default name.
+    await nameInput.click();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Backspace");
+    await nameInput.pressSequentially(c.voice_name, { delay: 30 });
+    await nameInput.press("Tab");
+    const typed = await nameInput.inputValue().catch(() => "");
+    if (typed !== c.voice_name)
+      throw new Error(`The Voice name field would not take "${c.voice_name}" (it holds "${typed}"). Character was created without a voice.`);
+  }
+  if (c.voice_sample) {
+    const sample = page.locator('textarea[placeholder^="Hi there!"]');
+    await sample.click();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Backspace");
+    await sample.pressSequentially(c.voice_sample, { delay: 20 });
+  }
+  const savedName = (await nameInput.inputValue().catch(() => "")) || `${c.voice} custom`;
+  const preview = page.getByRole("button", { name: /preview/i }).first();
+  await preview.click();
+  const deadline = Date.now() + 180_000;
+  for (;;) {
+    const state = await preview
+      .evaluate((b) => ({ disabled: (b as HTMLButtonElement).disabled, text: (b as HTMLElement).innerText }))
+      .catch(() => null);
+    if (state && !state.disabled && /play_arrow/.test(state.text)) break;
+    if (Date.now() > deadline)
+      throw new Error(
+        `Timed out waiting for Flow to generate the custom voice preview. Character was created without a voice; the performance was "${c.voice_performance}".`,
+      );
+    await pause(page, 3000);
+  }
+  const save = page.getByRole("button", { name: /save new voice/i }).first();
+  await save.waitFor({ state: "visible", timeout: 10_000 });
+  await save.click();
+  await page.getByRole("button", { name: "Add to character", exact: true }).waitFor({ state: "visible", timeout: 60_000 });
+  // The saved voice comes back selected in the list ("voice_selection settings_2 <name> <performance>…"); if a
+  // different voice is selected, "Add to character" would attach the wrong one, so say so instead of guessing.
+  const selected = await page.evaluate(() =>
+    [...document.querySelectorAll(".cdk-overlay-container [role='option']")]
+      .filter((o) => o.getAttribute("aria-selected") === "true")
+      .map((o) => (o as HTMLElement).innerText.replace(/\s+/g, " ")),
+  );
+  if (selected.length && !selected.some((t) => t.includes(savedName)))
+    throw new Error(`The custom voice was saved but did not come back selected (selected: ${selected.join(" | ")}). Character was created without a voice.`);
+  return savedName;
+}
+
+export async function createCharacter(c: CharacterParams, job?: Job): Promise<{ name: string; url: string; portrait?: string; voice?: string }> {
   const state = await getFlowState();
   if (!state.signedIn || !state.inProject) throw new Error(state.hint);
   const page = await getFlowPage();
@@ -1254,6 +1334,7 @@ export async function createCharacter(c: CharacterParams, job?: Job): Promise<{ 
   await name.press("Enter");
   if (c.personality) await page.getByRole("textbox", { name: "Character personality" }).fill(c.personality);
 
+  let attachedVoice: string | undefined;
   if (c.voice) {
     await page.getByRole("button", { name: "Select a voice" }).click();
     const voices = page.getByRole("listbox", { name: "Asset list" });
@@ -1265,8 +1346,18 @@ export async function createCharacter(c: CharacterParams, job?: Job): Promise<{ 
       throw new Error(`Voice "${c.voice}" not found. Character was created without a voice. Available: ${available.join("; ")}`);
     }
     await option.click();
-    // "Customize performance" would turn this into generating a new voice (preview + save); stock voices only.
-    await page.getByRole("button", { name: "Add to character", exact: true }).click();
+    // With a performance, Flow saves a NEW custom voice built from this preset and attaches that instead;
+    // without one the stock voice is attached as it is.
+    attachedVoice = c.voice_performance ? await customizeVoicePerformance(page, c) : c.voice;
+    const add = page.getByRole("button", { name: "Add to character", exact: true });
+    await add.click({ timeout: 15_000 }).catch(async () => {
+      // Measured 2026-11-08: with a custom voice picked, Flow re-renders the dialog around this button, so the
+      // click lands and the dialog closes while Playwright is still waiting for the element to settle - it
+      // reports a timeout for a click that worked (the voice was attached). A dialog that is still open is the
+      // only real failure, so check for that before clicking again.
+      await pause(page, 1500);
+      if (await add.isVisible().catch(() => false)) await add.click({ timeout: 15_000 });
+    });
     await pause(page, 1000);
   }
 
@@ -1279,7 +1370,7 @@ export async function createCharacter(c: CharacterParams, job?: Job): Promise<{ 
   if (await clear.isVisible().catch(() => false)) await clear.click();
   await showAllMedia(page);
   if (c.describe) rememberCharacter(c.name, c.describe);
-  return { name: c.name, url, portrait };
+  return { name: c.name, url, portrait, ...(attachedVoice ? { voice: attachedVoice } : {}) };
 }
 
 const EDIT_TIMEOUT_MS = 10 * 60_000;

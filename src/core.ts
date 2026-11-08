@@ -405,6 +405,28 @@ export const shapes = {
       .describe("With `image`: the person in the picture in words (face, hair, clothes). Every scene's character lock quotes it word for word, so describe only what the picture shows. Without it, an older description saved under the same name is dropped."),
     personality: z.string().max(500).optional().describe("How the character acts; Flow uses it when crafting scenes."),
     voice: z.string().optional().describe("Flow voice name, e.g. 'Charon' (male, informative) or 'Aoede' (female, breezy)."),
+    voice_performance: z
+      .string()
+      .max(1000)
+      .optional()
+      .describe(
+        "Customize performance for the voice: free text describing how the stock `voice` should perform - accent, age, mood, emotion and pace in one string, e.g. 'native Vietnamese speaker with a soft Southern accent, warm, calm and clear, slow gentle pace'. Needs `voice`. Flow builds and saves a NEW custom voice from that preset and attaches the custom voice instead of the preset; the saved voice then lives in the project's voice list and can be reused later as `voice: <voice_name>` with no performance text.",
+      ),
+    voice_name: z
+      .string()
+      .min(1)
+      .max(60)
+      .optional()
+      .describe(
+        "Name for the custom voice saved from `voice_performance`, e.g. 'James VN'. Flow's default is '<voice> custom', which collides when two characters share a base voice, so pass a real name then. Only used with `voice_performance`.",
+      ),
+    voice_sample: z
+      .string()
+      .max(120)
+      .optional()
+      .describe(
+        "Sample dialogue line Flow previews the custom voice with (120 characters at most), e.g. a short line in the character's own language. Only used with `voice_performance`; Flow's own sample line is used when it is left out.",
+      ),
   },
   techniques: { category: z.enum(["camera", "product", "transition", "image"]).optional() },
 };
@@ -774,6 +796,10 @@ export class LocalCore implements Core {
   async character(a: Args<"character">) {
     if (this.queue.busy) throw new Error(BUSY);
     if (!a.image && !a.describe) throw new Error("Pass either `describe` (Flow draws the portrait) or `image`.");
+    if ((a.voice_performance || a.voice_name || a.voice_sample) && !a.voice)
+      throw new Error("`voice_performance`, `voice_name` and `voice_sample` need a base stock `voice` to customise.");
+    if ((a.voice_name || a.voice_sample) && !a.voice_performance)
+      throw new Error("`voice_name` and `voice_sample` are only used together with `voice_performance`.");
     const made = await createCharacter(a);
     // Every scene quotes the saved description in its character lock, so a character made from a picture must not
     // inherit an older description saved under the same name: it described someone else (a "Maya" with a ponytail and

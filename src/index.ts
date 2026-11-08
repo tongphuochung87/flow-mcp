@@ -218,7 +218,7 @@ server.registerTool(
   {
     title: "Create a reusable character",
     description:
-      "Create a reusable Flow character (person, mascot, product) so it looks the same in every scene. Free. Give `describe` and Flow draws the portrait first, or `image` to use a picture you already have; optionally a personality and a stock voice. Afterwards pass 'asset:<name>' in a scene's reference_images.",
+      "Create a reusable Flow character (person, mascot, product) so it looks the same in every scene. Free. Give `describe` and Flow draws the portrait first, or `image` to use a picture you already have; optionally a personality and a stock voice. Pass `voice_performance` (free text: accent, age, mood, pace) to customise that voice: Flow saves a NEW custom voice from the preset and attaches it instead - name it with `voice_name`, audition a line with `voice_sample`. The result's `voice` says which voice was attached. Afterwards pass 'asset:<name>' in a scene's reference_images.",
     inputSchema: shapes.character,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
